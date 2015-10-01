@@ -1,93 +1,79 @@
 # -*- coding: utf-8 -*-
 
-import logging
-import os
-import re
-import sys
+"""
+    server.py
+    ~~~~~~~~~
+
+    tornado server
+
+    IPv4 HTTP(S) based Proxy Server.
+"""
+
+import time
 import socket
-from urlparse import urlparse
+import signal
+import logging
+from functools import partial
 
-import tornado.httpserver
-import tornado.ioloop
-import tornado.iostream
-import tornado.web
-from tornado.httpclient import HTTPRequest, AsyncHTTPClient
+from tornado.ioloop import IOLoop
+from tornado.web import Application
+from tornado.httpserver import HTTPServer
+from tornado.netutil import bind_sockets
+from tornado import options
+from tornado import process
 
-
-logger = logging.getLogger()
-
-
-class Proxy(tornado.web.RequestHandler):
-
-    @tornado.web.asynchronous
-    def get(self):
-        url = self.request.uri
-        method = self.request.method
-        headers = self.request.headers
-        body = self.request.body
-
-        logger.debug('Handle %s request to %s', method, url)
-
-        ua = headers.get('User-Agent', '')
-        client_ip = self.request.remote_ip
-
-        def _on_local_write(response):
-            headers = response.headers
-            cookies = response.headers.get_list('Set-Cookie')
-            body = response.body
-
-            self.set_status(response.code)
-
-            items = ['Date', 'Cache-Control', 'Server', 'Content-Type', 'Location']
-            for item, header in filter(lambda _: _[1], zip(items, map(headers.get, items))):
-                self.set_header(item, header)
-
-            for cookie in cookies:
-                self.add_header('Set-Cookie', cookie)
-
-            self.add_header('VIA', 'ReProxy')
-
-            if body:
-                self.write(body)
-
-            self.finish()
-
-        def _on_remote_read(url, **kwargs):
-            request = HTTPRequest(url, **kwargs)
-            client = AsyncHTTPClient()
-            client.fetch(request, _on_local_write, follow_redirects=True, max_redirects=3)
-
-        try:
-            _on_remote_read(url, method=method, headers=headers, body=body,
-                            follow_redirects=False, allow_nonstandard_methods=True)
-        except tornado.httpclient.HTTPError as e:
-            self.set_status(500)
-            self.write('Internal Server Error: %s' % e.message)
-            self.finish()
-
-    @tornado.web.asynchronous
-    def post(self):
-        return self.get()
+from proxy import ProxyHandler
 
 
-def run_server(port):
-    app = tornado.web.Application([
-        # TODO 这里可以。。。控制规则。。
-        (r'.*', Proxy),
-    ])
-    app.listen(port)
-    ioloop = tornado.ioloop.IOLoop.instance()
-    ioloop.start()
+MAX_WAIT_SECONDS_BEFORE_SHUTDOWN = 10
 
+
+def signal_handler(sig, _):
+    logging.warning('Caught Signal: %s', sig)
+    IOLoop.instance().add_callback(shutdown)
+
+
+def shutdown():
+    server.stop()
+    logging.warning('Stopping HttpServer...')
+
+    deadline = time.time() + MAX_WAIT_SECONDS_BEFORE_SHUTDOWN
+    io_loop = IOLoop.instance()
+
+    _safe_stop(deadline, io_loop)
+
+
+def _safe_stop(deadline, io_loop):
+    now = time.time()
+
+    if now < deadline and (io_loop._callbacks or io_loop._timeouts):
+        io_loop.add_timeout(now + 1, partial(_safe_stop, deadline, io_loop))
+    else:
+        io_loop.stop()
+        logging.warning('Stopping IOLoop...')
+
+
+options.define('debug', default=True)
+options.define('port', default=8899, type=int)
+options.define('fork', default=False, type=int)
+options.define('process', default=0, type=int)
+
+options.parse_command_line()
+
+application = Application([
+    (r'.*', ProxyHandler)
+])
 
 if __name__ == '__main__':
-    import argparse
+    sockets = bind_sockets(options.options.port, family=socket.AF_INET)
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument('-p', '--port', action='store', default=8899)
+    if options.options.fork:
+        process.fork_processes(options.options.process or 0)
 
-    args = parser.parse_args()
-    port = int(args.port)
+    server = HTTPServer(application, xheaders=True)
+    server.add_sockets(sockets)
 
-    run_server(port)
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
 
+    IOLoop.instance().start()
