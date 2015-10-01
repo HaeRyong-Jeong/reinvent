@@ -9,10 +9,11 @@
     IPv4 HTTP(S) based Proxy Server.
 """
 
-import time
+import os
+import sys
 import socket
-import signal
 import logging
+import multiprocessing
 from functools import partial
 
 from tornado.ioloop import IOLoop
@@ -23,40 +24,17 @@ from tornado import options
 from tornado import process
 
 from proxy import ProxyHandler
+from signals import set_signal_handler, close_handler, shutdown_handler
+from daemon import start, shutdown
 
 
-MAX_WAIT_SECONDS_BEFORE_SHUTDOWN = 10
+PATH = os.path.dirname(__file__)
 
-
-def signal_handler(sig, _):
-    logging.warning('Caught Signal: %s', sig)
-    IOLoop.instance().add_callback(shutdown)
-
-
-def shutdown():
-    server.stop()
-    logging.warning('Stopping HttpServer...')
-
-    deadline = time.time() + MAX_WAIT_SECONDS_BEFORE_SHUTDOWN
-    io_loop = IOLoop.instance()
-
-    _safe_stop(deadline, io_loop)
-
-
-def _safe_stop(deadline, io_loop):
-    now = time.time()
-
-    if now < deadline and (io_loop._callbacks or io_loop._timeouts):
-        io_loop.add_timeout(now + 1, partial(_safe_stop, deadline, io_loop))
-    else:
-        io_loop.stop()
-        logging.warning('Stopping IOLoop...')
-
-
-options.define('debug', default=True)
 options.define('port', default=8899, type=int)
-options.define('fork', default=False, type=int)
+options.define('fork', default=False)
 options.define('process', default=0, type=int)
+options.define('daemon', default='')
+options.define('path', default=PATH)
 
 options.parse_command_line()
 
@@ -65,15 +43,47 @@ application = Application([
 ])
 
 if __name__ == '__main__':
+    is_fork = options.options.fork
+    process_num = options.options.process
+    daemonize = options.options.daemon
+    path = options.options.path
+
+    if daemonize == 'start':
+        start(path)
+    elif daemonize == 'shutdown':
+        shutdown(path)
+        sys.exit(0)
+    elif daemonize == 'restart':
+        shutdown(path)
+        start(path)
+
+    pid = os.getpid()
+    children_pid = multiprocessing.Queue()
+
     sockets = bind_sockets(options.options.port, family=socket.AF_INET)
 
-    if options.options.fork:
-        process.fork_processes(options.options.process or 0)
+    # Tornado － 多进程
+    # 1. 创建 server socket.
+    # 2. fork 子进程, 所有的子进程都监听server socket.
+    #
+    # 主进程只做监管, os.wait()
+    # 子进程accept, 某子进程成功accept, 其他子进程再尝试accept就会 EWOULDBLOCK 或 EAGAIN 异常, 不处理直接返回.
+    if is_fork:
+        shutdown_handler = partial(shutdown_handler, children_pid)
+        set_signal_handler(shutdown_handler)
+        process.fork_processes(process_num or 0)
+
+    if pid == os.getppid():
+        children_pid.put(os.getpid())
+
+    logging.warning('Starting Server... PID: %s' % os.getpid())
 
     server = HTTPServer(application, xheaders=True)
     server.add_sockets(sockets)
 
-    signal.signal(signal.SIGTERM, signal_handler)
-    signal.signal(signal.SIGINT, signal_handler)
+    close_handler = partial(close_handler, server)
+    set_signal_handler(close_handler)
 
     IOLoop.instance().start()
+
+    logging.warning('Stopped Server... PID: %s' % os.getpid())
