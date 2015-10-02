@@ -18,53 +18,31 @@ import logging
 from signals import set_signal_handler, exit_handler
 
 
-def to_bytes(s):
-    if bytes != str:
-        if type(s) == str:
-            return s.encode('utf-8')
-    return s
-
-
-def to_str(s):
-    if bytes != str:
-        if type(s) == bytes:
-            return s.decode('utf-8')
-    return s
-
-
 def with_pid_file(pid_file, pid):
     """"""
     try:
         fd = os.open(pid_file, os.O_RDWR | os.O_CREAT, stat.S_IRUSR | stat.S_IWUSR)
     except OSError as e:
         logging.error(e.message)
-        return -1
+        return False
 
     flags = fcntl.fcntl(fd, fcntl.F_GETFD)
     assert flags != -1
 
-    flags |= fcntl.FD_CLOEXEC
-
-    # TODO why use r not flags
-    # r = fcntl.fcntl(fd, fcntl.F_SETFD, flags)
-    # assert r != -1
-    flags = fcntl.fcntl(fd, fcntl.F_SETFD, flags)
+    flags = fcntl.fcntl(fd, fcntl.F_SETFD, flags | fcntl.FD_CLOEXEC)
     assert flags != -1
 
     try:
-        fcntl.lockf(fd, fcntl.LOCK_EX | fcntl.LOCK_NB, 0, 0, os.SEEK_SET)
+        fcntl.lockf(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except IOError:
-        r = os.read(fd, 32)
-        if r:
-            logging.error('already started at pid %s' % to_str(r))
-        else:
-            logging.error('already started')
+        pid = os.read(fd, 32)
+        logging.error('already started %(pid)s' % {'pid': pid})
         os.close(fd)
-        return -1
+        return False
 
     os.ftruncate(fd, 0)
-    os.write(fd, to_bytes(str(pid)))
-    return 0
+    os.write(fd, str(pid))
+    return True
 
 
 def freopen(log_file, mode, stream):
@@ -87,20 +65,13 @@ def start(path):
     assert pid != -1
 
     if pid > 0:
-        time.sleep(5)
         sys.exit(0)
 
-    ppid = os.getppid()
-    pid = os.getpid()
-
-    if with_pid_file(pid_file, pid) != 0:
-        os.kill(ppid, signal.SIGINT)
+    if not with_pid_file(pid_file, os.getpid()):
         sys.exit(1)
 
     os.setsid()  # TODO What's this
     signal.signal(signal.SIG_IGN, signal.SIGHUP)  # TODO and what's this
-
-    os.kill(ppid, signal.SIGTERM)
 
     sys.stdin.close()
     try:
@@ -116,9 +87,8 @@ def shutdown(path):
 
     try:
         with open(pid_file) as f:
-            buf = f.read()
-            pid = to_str(buf)
-            if not buf:
+            pid = f.read()
+            if not pid:
                 logging.error('not running...')
     except IOError as e:
         logging.error(e.message)
