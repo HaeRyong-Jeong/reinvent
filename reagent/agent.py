@@ -17,7 +17,7 @@ from tornado.web import RequestHandler, asynchronous, HTTPError as sHTTPError
 from tornado.httpclient import HTTPRequest, AsyncHTTPClient, HTTPError as cHTTPError
 
 
-class ProxyHandler(RequestHandler):
+class AgentHandler(RequestHandler):
 
     SUPPORTED_METHODS = ("GET", "POST", "CONNECT")
 

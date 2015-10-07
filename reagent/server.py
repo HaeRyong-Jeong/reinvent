@@ -23,7 +23,7 @@ from tornado.netutil import bind_sockets
 from tornado import options
 from tornado import process
 
-from proxy import ProxyHandler
+from agent import AgentHandler
 from signals import set_signal_handler, close_handler, shutdown_handler
 from daemon import start, shutdown
 
@@ -39,7 +39,7 @@ options.define('path', default=PATH)
 options.parse_command_line()
 
 application = Application([
-    (r'.*', ProxyHandler)
+    (r'.*', AgentHandler)
 ])
 
 if __name__ == '__main__':
