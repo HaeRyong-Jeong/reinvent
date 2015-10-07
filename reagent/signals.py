@@ -29,7 +29,6 @@ def shutdown_handler(children_pid, signum, _):
             pid = children_pid.get(True)
             try:
                 os.kill(pid, signum)
-                # os.waitpid(pid, 0)  # TODO 有这个会报错。wait是个啥。。
             except OSError as e:
                 if e.errno == errno.ESRCH:
                     logging.error('not running...')
