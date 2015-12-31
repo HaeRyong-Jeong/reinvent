@@ -17,9 +17,14 @@ from tornado.web import RequestHandler, asynchronous, HTTPError as sHTTPError
 from tornado.httpclient import HTTPRequest, AsyncHTTPClient, HTTPError as cHTTPError
 
 
+class HiHandler(RequestHandler):
+    def get(self):
+        self.write('hi...')
+
+
 class AgentHandler(RequestHandler):
 
-    SUPPORTED_METHODS = ("GET", "POST", "CONNECT")
+    SUPPORTED_METHODS = ('GET', 'POST', 'CONNECT')
 
     @asynchronous
     def get(self):

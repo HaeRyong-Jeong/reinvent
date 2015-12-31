@@ -23,7 +23,7 @@ from tornado.netutil import bind_sockets
 from tornado import options
 from tornado import process
 
-from agent import AgentHandler
+from agent import AgentHandler, HiHandler
 from signals import set_signal_handler, close_handler, shutdown_handler
 from daemon import start, shutdown
 
@@ -39,7 +39,8 @@ options.define('path', default=PATH)
 options.parse_command_line()
 
 application = Application([
-    (r'.*', AgentHandler)
+    (r'/hi', HiHandler),
+    (r'.*', AgentHandler),
 ])
 
 if __name__ == '__main__':
@@ -78,7 +79,8 @@ if __name__ == '__main__':
 
     logging.warning('Starting Server... PID: %s' % os.getpid())
 
-    server = HTTPServer(application, xheaders=True)
+    # server = HTTPServer(application, xheaders=True)
+    server = HTTPServer(application)
     server.add_sockets(sockets)
 
     close_handler = partial(close_handler, server)
